@@ -109,7 +109,7 @@ if cuda:
 #     shuffle=True,
 # )
 
-dataset = load_dataset("wellCh4n/tomato-leaf-disease-image")
+dataset = load_dataset("wellCh4n/tomato-leaf-disease-image").filter(lambda example, idx: example['label'] == 0, with_indices=True)
 train = dataset['train'].with_format('torch')
 dataloader = torch.utils.data.DataLoader(train, batch_size=opt.batch_size)
 
