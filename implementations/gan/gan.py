@@ -40,26 +40,28 @@ cuda = True if torch.cuda.is_available() else False
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
-
-        def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
-            if normalize:
-                layers.append(nn.BatchNorm1d(out_feat, 0.8))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
-
-        self.model = nn.Sequential(
-            *block(opt.latent_dim, 128, normalize=False),
-            *block(128, 256),
-            *block(256, 512),
-            *block(512, 1024),
-            nn.Linear(1024, int(np.prod(img_shape))),
-            nn.Tanh()
+        
+        self.init_size = opt.img_size // 4  # 初始特征图大小
+        self.l1 = nn.Sequential(nn.Linear(opt.latent_dim, 128 * self.init_size ** 2))
+        
+        self.conv_blocks = nn.Sequential(
+            nn.BatchNorm2d(128),
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(128, 128, 3, stride=1, padding=1),
+            nn.BatchNorm2d(128, 0.8),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(128, 64, 3, stride=1, padding=1),
+            nn.BatchNorm2d(64, 0.8),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, opt.channels, 3, stride=1, padding=1),
+            nn.Tanh(),
         )
 
     def forward(self, z):
-        img = self.model(z)
-        img = img.view(img.size(0), *img_shape)
+        out = self.l1(z)
+        out = out.view(out.shape[0], 128, self.init_size, self.init_size)
+        img = self.conv_blocks(out)
         return img
 
 
@@ -67,19 +69,27 @@ class Discriminator(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
 
+        def discriminator_block(in_filters, out_filters, bn=True):
+            block = [nn.Conv2d(in_filters, out_filters, 3, 2, 1), nn.LeakyReLU(0.2, inplace=True), nn.Dropout2d(0.25)]
+            if bn:
+                block.append(nn.BatchNorm2d(out_filters, 0.8))
+            return block
+
         self.model = nn.Sequential(
-            nn.Linear(int(np.prod(img_shape)), 512),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(512, 256),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(256, 1),
-            nn.Sigmoid(),
+            *discriminator_block(opt.channels, 16, bn=False),
+            *discriminator_block(16, 32),
+            *discriminator_block(32, 64),
+            *discriminator_block(64, 128),
         )
 
-    def forward(self, img):
-        img_flat = img.view(img.size(0), -1)
-        validity = self.model(img_flat)
+        # 计算卷积后的特征图大小
+        ds_size = opt.img_size // 2 ** 4
+        self.adv_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, 1), nn.Sigmoid())
 
+    def forward(self, img):
+        out = self.model(img)
+        out = out.view(out.shape[0], -1)
+        validity = self.adv_layer(out)
         return validity
 
 
@@ -112,7 +122,33 @@ if cuda:
 
 dataset = load_dataset("wellCh4n/tomato-leaf-disease-image").filter(lambda example, idx: example['label'] == 0, with_indices=True)
 train = dataset['train'].with_format('torch')
-dataloader = torch.utils.data.DataLoader(train, batch_size=opt.batch_size)
+
+# 添加数据预处理
+transform = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((opt.img_size, opt.img_size)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+])
+
+# 自定义数据集类
+class TomatoLeafDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, transform=None):
+        self.dataset = dataset
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        img = self.dataset[idx]['image']
+        if self.transform:
+            img = self.transform(img)
+        return img
+
+# 使用自定义数据集
+tomato_dataset = TomatoLeafDataset(train, transform=transform)
+dataloader = torch.utils.data.DataLoader(tomato_dataset, batch_size=opt.batch_size, shuffle=True)
 
 # Optimizers
 optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.lr1, betas=(opt.b1, opt.b2))
@@ -125,8 +161,7 @@ Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 # ----------
 
 for epoch in range(opt.n_epochs):
-    for i, item in enumerate(dataloader):
-        imgs = item['image']
+    for i, imgs in enumerate(dataloader):
         # Adversarial ground truths
         valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
         fake = Variable(Tensor(imgs.size(0), 1).fill_(0.0), requires_grad=False)
@@ -161,15 +196,17 @@ for epoch in range(opt.n_epochs):
         # Measure discriminator's ability to classify real from generated samples
         real_loss = adversarial_loss(discriminator(real_imgs), valid)
         fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake)
-        d_loss = real_loss + fake_loss
+        d_loss = (real_loss + fake_loss) / 2
 
         d_loss.backward()
         optimizer_D.step()
 
-        print(
-            "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-            % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
-        )
+        # 打印训练进度
+        if i % 50 == 0:
+            print(
+                "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
+                % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
+            )
 
         batches_done = epoch * len(dataloader) + i
         if batches_done % opt.sample_interval == 0:
