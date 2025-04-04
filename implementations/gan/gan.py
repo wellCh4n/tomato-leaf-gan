@@ -167,46 +167,68 @@ best_g_loss = float('inf')
 for epoch in range(opt.n_epochs):
     epoch_g_loss = 0  # 初始化每个epoch的生成器损失跟踪器
     for i, imgs in enumerate(dataloader):
-        # Adversarial ground truths
-        valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
-        fake = Variable(Tensor(imgs.size(0), 1).fill_(0.0), requires_grad=False)
+        batch_size = imgs.size(0)
+        
+        # 使用标签平滑化
+        valid_smooth = Variable(Tensor(batch_size, 1).fill_(0.9), requires_grad=False)  # 原来是1.0
+        fake_smooth = Variable(Tensor(batch_size, 1).fill_(0.1), requires_grad=False)   # 原来是0.0
 
         # Configure input
         real_imgs = Variable(imgs.type(Tensor))
         
+        # 添加噪声到真实图像
+        real_imgs_noisy = real_imgs + 0.05 * torch.randn_like(real_imgs)
+        
         # Sample noise as generator input
-        z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
+        z = Variable(Tensor(np.random.normal(0, 1, (batch_size, opt.latent_dim))))
         
         # Generate a batch of images
         gen_imgs = generator(z)
 
         # ---------------------
-        #  先训练判别器
+        #  训练判别器 (多次训练判别器)
         # ---------------------
-
-        optimizer_D.zero_grad()
-
-        # 测量判别器区分真实样本和生成样本的能力
-        real_loss = adversarial_loss(discriminator(real_imgs), valid)
-        fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake)
-        d_loss = (real_loss + fake_loss) / 2
-
-        d_loss.backward()
-        optimizer_D.step()
-
-        # -----------------
-        #  后训练生成器
-        # -----------------
-
-        optimizer_G.zero_grad()
-
-        # 生成器的损失衡量其欺骗判别器的能力
-        g_loss = adversarial_loss(discriminator(gen_imgs), valid)
         
-        epoch_g_loss += g_loss.item()  # 累积此epoch的损失
+        # 每训练5次判别器，训练1次生成器
+        d_iters = 5 if i % 5 == 0 else 1
+        
+        for _ in range(d_iters):
+            optimizer_D.zero_grad()
 
-        g_loss.backward()
-        optimizer_G.step()
+            # 测量判别器区分真实样本和生成样本的能力
+            real_loss = adversarial_loss(discriminator(real_imgs_noisy), valid_smooth)
+            fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake_smooth)
+            d_loss = (real_loss + fake_loss) / 2
+
+            d_loss.backward()
+            optimizer_D.step()
+            
+            # 如果判别器太强，提前停止训练
+            if d_loss.item() < 0.1:
+                break
+
+        # -----------------
+        #  训练生成器 (仅当判别器表现不是太好时)
+        # -----------------
+        
+        # 只有当判别器损失大于阈值时才训练生成器
+        if d_loss.item() > 0.2:
+            optimizer_G.zero_grad()
+
+            # 生成器的损失衡量其欺骗判别器的能力
+            g_loss = adversarial_loss(discriminator(gen_imgs), valid_smooth)
+            
+            epoch_g_loss += g_loss.item()  # 累积此epoch的损失
+
+            g_loss.backward()
+            optimizer_G.step()
+        
+        # 动态调整学习率
+        if epoch > 50:
+            for param_group in optimizer_G.param_groups:
+                param_group['lr'] = max(param_group['lr'] * 0.998, 1e-5)  # 缓慢降低学习率
+            for param_group in optimizer_D.param_groups:
+                param_group['lr'] = max(param_group['lr'] * 0.998, 1e-5)  # 缓慢降低学习率
 
         # 打印训练进度
         print(
