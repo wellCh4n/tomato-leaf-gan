@@ -156,11 +156,16 @@ optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr2, betas=(op
 
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
+# 在训练循环前添加
+os.makedirs("models", exist_ok=True)
+best_g_loss = float('inf')
+
 # ----------
 #  Training
 # ----------
 
 for epoch in range(opt.n_epochs):
+    epoch_g_loss = 0  # Initialize the epoch loss tracker at the start of each epoch
     for i, imgs in enumerate(dataloader):
         # Adversarial ground truths
         valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
@@ -183,6 +188,8 @@ for epoch in range(opt.n_epochs):
 
         # Loss measures generator's ability to fool the discriminator
         g_loss = adversarial_loss(discriminator(gen_imgs), valid)
+        
+        epoch_g_loss += g_loss.item()  # Accumulate the loss for this epoch
 
         g_loss.backward()
         optimizer_G.step()
