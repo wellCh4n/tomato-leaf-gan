@@ -202,11 +202,10 @@ for epoch in range(opt.n_epochs):
         optimizer_D.step()
 
         # 打印训练进度
-        if i % 50 == 0:
-            print(
-                "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-                % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
-            )
+        print(
+            "[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
+            % (epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item())
+        )
 
         batches_done = epoch * len(dataloader) + i
         if batches_done % opt.sample_interval == 0:
