@@ -165,7 +165,7 @@ best_g_loss = float('inf')
 # ----------
 
 for epoch in range(opt.n_epochs):
-    epoch_g_loss = 0  # Initialize the epoch loss tracker at the start of each epoch
+    epoch_g_loss = 0  # 初始化每个epoch的生成器损失跟踪器
     for i, imgs in enumerate(dataloader):
         # Adversarial ground truths
         valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
@@ -173,40 +173,40 @@ for epoch in range(opt.n_epochs):
 
         # Configure input
         real_imgs = Variable(imgs.type(Tensor))
-
-        # -----------------
-        #  Train Generator
-        # -----------------
-
-        optimizer_G.zero_grad()
-
+        
         # Sample noise as generator input
         z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim))))
-
+        
         # Generate a batch of images
         gen_imgs = generator(z)
 
-        # Loss measures generator's ability to fool the discriminator
-        g_loss = adversarial_loss(discriminator(gen_imgs), valid)
-        
-        epoch_g_loss += g_loss.item()  # Accumulate the loss for this epoch
-
-        g_loss.backward()
-        optimizer_G.step()
-
         # ---------------------
-        #  Train Discriminator
+        #  先训练判别器
         # ---------------------
 
         optimizer_D.zero_grad()
 
-        # Measure discriminator's ability to classify real from generated samples
+        # 测量判别器区分真实样本和生成样本的能力
         real_loss = adversarial_loss(discriminator(real_imgs), valid)
         fake_loss = adversarial_loss(discriminator(gen_imgs.detach()), fake)
         d_loss = (real_loss + fake_loss) / 2
 
         d_loss.backward()
         optimizer_D.step()
+
+        # -----------------
+        #  后训练生成器
+        # -----------------
+
+        optimizer_G.zero_grad()
+
+        # 生成器的损失衡量其欺骗判别器的能力
+        g_loss = adversarial_loss(discriminator(gen_imgs), valid)
+        
+        epoch_g_loss += g_loss.item()  # 累积此epoch的损失
+
+        g_loss.backward()
+        optimizer_G.step()
 
         # 打印训练进度
         print(
