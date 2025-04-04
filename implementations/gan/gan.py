@@ -210,3 +210,27 @@ for epoch in range(opt.n_epochs):
         batches_done = epoch * len(dataloader) + i
         if batches_done % opt.sample_interval == 0:
             save_image(gen_imgs.data[:25], "images/%d.png" % batches_done, nrow=5, normalize=True)
+    
+    # 计算每个epoch的平均生成器损失
+    avg_g_loss = epoch_g_loss / len(dataloader)
+    
+    # 保存最佳模型
+    if avg_g_loss < best_g_loss:
+        best_g_loss = avg_g_loss
+        torch.save(generator.state_dict(), "models/best_generator.pth")
+        torch.save(discriminator.state_dict(), "models/best_discriminator.pth")
+        print(f"模型已保存! Epoch {epoch}, 最佳生成器损失: {best_g_loss:.6f}")
+    
+    # 每10个epoch保存一次检查点
+    if epoch % 10 == 0:
+        torch.save({
+            'epoch': epoch,
+            'generator_state_dict': generator.state_dict(),
+            'discriminator_state_dict': discriminator.state_dict(),
+            'optimizer_G_state_dict': optimizer_G.state_dict(),
+            'optimizer_D_state_dict': optimizer_D.state_dict(),
+            'g_loss': g_loss,
+            'd_loss': d_loss,
+            'best_g_loss': best_g_loss
+        }, f"models/checkpoint_epoch_{epoch}.pth")
+        print(f"Epoch {epoch} 检查点已保存!")
